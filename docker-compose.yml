@@ -1,0 +1,215 @@
+version: '3.8'
+
+services:
+  crud-service:
+    build:
+      context: .
+      dockerfile: crud-service/Dockerfile
+    container_name: ai-gigaschool-crud
+    env_file:
+      - .env
+    environment:
+      # БД на хосте: repo/db_app.sqlite3 (каталог repo примонтирован, файл создастся при первом запуске)
+      - SQLITE_PATH=/app/persist/db_app.sqlite3
+    volumes:
+      - ./repo:/app/persist
+    restart: unless-stopped
+    networks:
+      - ai-gigaschool-network
+
+  vector-store:
+    build:
+      context: .
+      dockerfile: vector_store/Dockerfile
+    container_name: ai-gigaschool-vector-store
+    env_file:
+      - .env
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-yandex}
+      - YANDEX_CLOUD_FOLDER=${YANDEX_CLOUD_FOLDER:-}
+      - YANDEX_CLOUD_API_KEY=${YANDEX_CLOUD_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - RAG_EMBEDDING_PROVIDER=${RAG_EMBEDDING_PROVIDER:-}
+      - RAG_YANDEX_EMBEDDING_QUERY_MODEL=${RAG_YANDEX_EMBEDDING_QUERY_MODEL:-}
+      - RAG_YANDEX_EMBEDDING_DOC_MODEL=${RAG_YANDEX_EMBEDDING_DOC_MODEL:-}
+      - RAG_YANDEX_EMBEDDING_MODEL_VERSION=${RAG_YANDEX_EMBEDDING_MODEL_VERSION:-}
+      - RAG_OPENAI_EMBEDDING_MODEL=${RAG_OPENAI_EMBEDDING_MODEL:-}
+      - RAG_GOOGLE_EMBEDDING_MODEL=${RAG_GOOGLE_EMBEDDING_MODEL:-}
+      - RAG_MISTRAL_EMBEDDING_MODEL=${RAG_MISTRAL_EMBEDDING_MODEL:-}
+      - FAISS_PROFESSION_VECTOR_ROOT=${FAISS_PROFESSION_VECTOR_ROOT:-}
+      - FAISS_COURSES_VECTOR_ROOT=${FAISS_COURSES_VECTOR_ROOT:-}
+      - FAISS_PROFESSION_INDEX_DIR=${FAISS_PROFESSION_INDEX_DIR:-}
+      - FAISS_COURSES_INDEX_DIR=${FAISS_COURSES_INDEX_DIR:-}
+      - FAISS_PROFESSION_SOURCE_JSON=${FAISS_PROFESSION_SOURCE_JSON:-}
+      - FAISS_EDUCATION_SOURCE_JSON=${FAISS_EDUCATION_SOURCE_JSON:-}
+      - VECTOR_STORE_LOG_LEVEL=${VECTOR_STORE_LOG_LEVEL:-INFO}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - ai-gigaschool-network
+
+  llm-service:
+    build:
+      context: .
+      dockerfile: model/Dockerfile.llm
+    container_name: ai-gigaschool-llm
+    env_file:
+      - .env
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-yandex}
+      - YANDEX_CLOUD_FOLDER=${YANDEX_CLOUD_FOLDER:-}
+      - YANDEX_CLOUD_API_KEY=${YANDEX_CLOUD_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - VECTOR_STORE_SERVICE_URL=http://vector-store:8030
+      - LOG_ROOT=/app/logs
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - vector-store
+    networks:
+      - ai-gigaschool-network
+
+  core:
+    build:
+      context: .
+      dockerfile: core/Dockerfile
+    container_name: ai-gigaschool-core
+    ports:
+      - "8000:8020"
+    env_file:
+      - .env
+    # RAG/FAISS — в сервисе vector-store; пересборка через Core (прокси) или напрямую vector-store:8030
+    environment:
+      - CRUD_SERVICE_URL=http://crud-service:8010
+      - LLM_SERVICE_URL=http://llm-service:8001
+      - WEB_SEARCH_API_URL=http://tavily-adapter:1000
+      - LLM_PROVIDER=${LLM_PROVIDER:-yandex}
+      - YANDEX_CLOUD_FOLDER=${YANDEX_CLOUD_FOLDER:-}
+      - YANDEX_CLOUD_API_KEY=${YANDEX_CLOUD_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - test_run_version=${TEST_RUN_VERSION:-v1}
+      - VECTOR_STORE_SERVICE_URL=http://vector-store:8030
+      - CORE_REBUILD_FAISS_SECRET=${CORE_REBUILD_FAISS_SECRET:-}
+      - CORE_LOG_LEVEL=${CORE_LOG_LEVEL:-INFO}
+      - LOG_ROOT=/app/logs
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - crud-service
+      - llm-service
+      - tavily-adapter
+      - vector-store
+    networks:
+      - ai-gigaschool-network
+
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: tg-module/Dockerfile
+    container_name: ai-gigaschool-bot
+    env_file:
+      - .env
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - LLM_BASE_URL=http://core:8020
+      - LLM_API_URL=http://core:8020/start_talk/
+      - LLM_FINISH_TEST_URL=http://core:8020/finish_test_early/
+      - LLM_PROFESSION_API_URL=http://core:8020/get_profession_info/
+      - LLM_ROADMAP_API_URL=http://core:8020/get_profession_roadmap/
+      - LLM_CLEAN_API_URL=http://core:8020/clean_history/
+      - CRUD_SERVICE_URL=http://crud-service:8010
+      - LOG_ROOT=/app/logs
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - core
+    restart: unless-stopped
+    networks:
+      - ai-gigaschool-network
+
+  searxng:
+    container_name: searxng
+    image: docker.io/searxng/searxng:latest
+    pull_policy: if_not_present
+    restart: unless-stopped
+    networks:
+      - ai-gigaschool-network
+    ports:
+      - "8999:8080"
+    volumes:
+      # Каталог должен быть writable: при первом старте SearXNG создаёт /etc/searxng/settings.yml из шаблона.
+      - ./web_search/searxng:/etc/searxng:rw
+      - searxng-data:/var/cache/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8999/
+      - BIND_ADDRESS=[::]:8080
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  tavily-adapter:
+    build:
+      context: ./web_search/simple_tavily_adapter
+      dockerfile: Dockerfile
+    container_name: tavily-adapter
+    restart: unless-stopped
+    networks:
+      - ai-gigaschool-network
+    ports:
+      - "1000:1000"
+    volumes:
+      - ./web_search/searxng:/srv/searxng-docker:ro
+    depends_on:
+      - searxng
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai-gigaschool-prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    depends_on:
+      - core
+      - llm-service
+    networks:
+      - ai-gigaschool-network
+
+networks:
+  ai-gigaschool-network:
+    driver: bridge
+
+volumes:
+  searxng-data:
+    driver: local
+  prometheus_data:
+    driver: local

@@ -1,0 +1,49 @@
+# Скопируйте в settings.yml и задайте свой server.secret_key (≥32 символов).
+# cp searxng/settings.example.yml searxng/settings.yml
+
+use_default_settings:
+  engines:
+    remove:
+      - radio browser
+      - ahmia
+      - torch
+
+server:
+  secret_key: "ЗАМЕНИТЕ_НА_СЛУЧАЙНУЮ_СТРОКУ_МИНИМУМ_32_СИМВОЛА"
+  limiter: false
+  image_proxy: true
+
+search:
+  formats:
+    - html
+    - json
+    - csv
+    - rss
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+
+engines:
+  - name: bing
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: yacy images
+    disabled: true
+
+adapter:
+  server:
+    host: "0.0.0.0"
+    port: 1000
+  searxng_url: "http://searxng:8080"
+  scraper:
+    timeout: 10
+    max_content_length: 2500
+    user_agent: "Mozilla/5.0 (compatible; TavilyBot/1.0)"
+  search:
+    default_max_results: 10
+    default_engines: "google,duckduckgo,brave"
+    default_categories: "general"
+    default_language: "auto"
+    safesearch: 1
